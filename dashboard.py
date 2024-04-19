@@ -5,11 +5,21 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
+import os
+import subprocess
+
+# Create the database
+def create_database():
+    subprocess.run(["python", "create_database.py"])
 
 # Connect to the database
+db_exists = os.path.exists('weight_progress.db')
 conn = sqlite3.connect('weight_progress.db')
 cursor = conn.cursor()
 
+if not db_exists:
+    create_database()
+    
 # Function to retrieve all entries from the database
 def get_all_entries():
     cursor.execute('SELECT * FROM weight_measurements')
@@ -21,25 +31,50 @@ def remove_entry(entry_id):
     deleted_date = cursor.fetchone()[0]
     cursor.execute('DELETE FROM weight_measurements WHERE id = ?', (entry_id,))
     conn.commit()
+    reset_ids()
     return deleted_date
 
-# Function to reset ids based on date
 def reset_ids():
-    cursor.execute('SELECT id, date FROM weight_measurements ORDER BY date')
+    # Remove the primary key constraint
+    cursor.execute('PRAGMA foreign_keys=off')
+    cursor.execute('BEGIN TRANSACTION')
+    cursor.execute('CREATE TEMPORARY TABLE temp_table AS SELECT * FROM weight_measurements')
+    cursor.execute('DROP TABLE weight_measurements')
+    cursor.execute('''
+        CREATE TABLE weight_measurements (
+            id INTEGER PRIMARY KEY,
+            date DATE,
+            fat_percentage FLOAT,
+            muscle_percentage FLOAT,
+            water_percentage FLOAT,
+            weight FLOAT,
+            age INTEGER,
+            fat_mass FLOAT DEFAULT 0,
+            muscle_mass FLOAT DEFAULT 0
+        )
+    ''')
+
+    # Reset the index based on date
+    cursor.execute('SELECT id, date FROM temp_table ORDER BY date')
     entries = cursor.fetchall()
+
     for new_id, (old_id, date) in enumerate(entries, start=1):
-        cursor.execute('UPDATE weight_measurements SET id = ? WHERE id = ?', (new_id, old_id))
+        cursor.execute('INSERT INTO weight_measurements SELECT ?, date, fat_percentage, muscle_percentage, water_percentage, weight, age, fat_mass, muscle_mass FROM temp_table WHERE id = ?', (new_id, old_id))
+
+    cursor.execute('DROP TABLE temp_table')
+    cursor.execute('COMMIT')
     conn.commit()
 
 # Function to add a new entry to the database
 def add_entry(date, fat, muscle, water, weight, age):
     cursor.execute('''
-        INSERT INTO weight_measurements (date, fat_percentage, muscle_percentage, water_percentage, weight, age)
+        INSERT OR REPLACE INTO weight_measurements (date, fat_percentage, muscle_percentage, water_percentage, weight, age)
         VALUES (?, ?, ?, ?, ?, ?)
     ''', (date, fat, muscle, water, weight, age))
     conn.commit()
     cursor.execute('SELECT last_insert_rowid()')
     entry_id = cursor.fetchone()[0]
+    reset_ids()
     calculate_mass(entry_id, weight, fat, muscle)
 
 # Function to calculate muscle mass and fat mass and update the database
@@ -57,10 +92,10 @@ def calculate_mass(entry_id, weight, fat_percentage, muscle_percentage):
 def main():
     st.title('Weight Progress Dashboard')
 
+
     # Display all entries in a table
     entries = get_all_entries()
     if entries:
-        reset_ids()
         st.subheader('All Entries')
         table_data = []
         for entry in entries:
@@ -81,7 +116,7 @@ def main():
                 deleted_date = remove_entry(entry_id)
                 reset_ids()
                 st.success('Entry removed successfully.')
-                st.experimental_rerun()
+                st.rerun()
 
        # Pie chart section
         st.subheader('Body Composition')
