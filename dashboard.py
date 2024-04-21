@@ -72,20 +72,17 @@ def add_entry(date, fat, muscle, water, weight, age):
         VALUES (?, ?, ?, ?, ?, ?)
     ''', (date, fat, muscle, water, weight, age))
     conn.commit()
-    cursor.execute('SELECT last_insert_rowid()')
-    entry_id = cursor.fetchone()[0]
-    reset_ids()
-    calculate_mass(entry_id, weight, fat, muscle)
+    calculate_mass(date, weight, fat, muscle)
 
 # Function to calculate muscle mass and fat mass and update the database
-def calculate_mass(entry_id, weight, fat_percentage, muscle_percentage):
+def calculate_mass(date, weight, fat_percentage, muscle_percentage):
     fat_mass = weight * (fat_percentage / 100)
     muscle_mass = weight * (muscle_percentage / 100)
     cursor.execute('''
         UPDATE weight_measurements
         SET fat_mass = ?, muscle_mass = ?
-        WHERE id = ?
-    ''', (fat_mass, muscle_mass, entry_id))
+        WHERE date = ?
+    ''', (fat_mass, muscle_mass, date))
     conn.commit()
 
 # Streamlit app
@@ -120,27 +117,23 @@ def main():
 
        # Pie chart section
         st.subheader('Body Composition')
-        cursor.execute('SELECT fat_percentage, muscle_percentage, weight FROM weight_measurements WHERE fat_mass IS NOT NULL AND muscle_mass IS NOT NULL ORDER BY date DESC LIMIT 1')
+        cursor.execute('SELECT fat_percentage, muscle_percentage, water_percentage, weight FROM weight_measurements ORDER BY date DESC LIMIT 1')
         latest_entry = cursor.fetchone()
         if latest_entry:
-            fat_percentage, muscle_percentage, weight = latest_entry
-            water_percentage = 100 - fat_percentage - muscle_percentage
+            fat_percentage, muscle_percentage, water_percentage, weight = latest_entry
 
             fat_mass = weight * (fat_percentage / 100)
             muscle_mass = weight * (muscle_percentage / 100)
             water_mass = weight * (water_percentage / 100)
 
-            fat_mass_without_water = fat_mass * (1 - water_percentage / 100)
-            muscle_mass_without_water = muscle_mass * (1 - water_percentage / 100)
-
-            labels = ['Fat Mass (without water)', 'Muscle Mass (without water)', 'Water Mass']
-            values = [fat_mass_without_water, muscle_mass_without_water, water_mass]
+            labels = ['Fat Mass', 'Muscle Mass', 'Water Mass']
+            values = [fat_mass, muscle_mass, water_mass]
 
             fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=0.4)])
             fig.update_layout(title_text='Body Composition')
             st.plotly_chart(fig)
         else:
-            st.warning('No entries found with fat mass and muscle mass data.')
+            st.warning('No entries found.')
 
         # Line graph section
         st.subheader('Progress Over Time')
