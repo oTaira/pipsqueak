@@ -7,6 +7,35 @@ import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 import os
 import subprocess
+import cv2
+import pytesseract
+import numpy as np
+
+#Important enter path to tesseract object
+pytesseract.tesseract_cmd = r'/usr/local/bin/tesseract'
+
+def preprocess_image(image):
+    # Convert the image to grayscale
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Apply bilateral filter for smoothing while preserving edges
+    gray = cv2.bilateralFilter(gray, 11, 17, 17)
+
+    # Apply adaptive thresholding to create a binary image
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+
+    # Find contours in the binary image
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Create a mask for the display area
+    mask = np.zeros_like(binary)
+    display_contour = max(contours, key=cv2.contourArea)
+    cv2.drawContours(mask, [display_contour], 0, 255, -1)
+
+    # Apply the mask to the binary image to isolate the display area
+    display_binary = cv2.bitwise_and(binary, mask)
+
+    return display_binary
 
 # Create the database
 def create_database():
@@ -19,7 +48,7 @@ cursor = conn.cursor()
 
 if not db_exists:
     create_database()
-    
+
 # Function to retrieve all entries from the database
 def get_all_entries():
     cursor.execute('SELECT * FROM weight_measurements')
@@ -88,7 +117,6 @@ def calculate_mass(date, weight, fat_percentage, muscle_percentage):
 # Streamlit app
 def main():
     st.title('Weight Progress Dashboard')
-
 
     # Display all entries in a table
     entries = get_all_entries()
@@ -170,18 +198,63 @@ def main():
 
     # Add new entry section
     st.subheader('Add New Entry')
-    date = st.date_input('Date')
-    fat = st.number_input('Fat Percentage', min_value=0.0, max_value=100.0, step=0.1)
-    muscle = st.number_input('Muscle Percentage', min_value=0.0, max_value=100.0, step=0.1)
-    water = st.number_input('Water Percentage', min_value=0.0, max_value=100.0, step=0.1)
-    weight = st.number_input('Weight', min_value=0.0, step=0.1)
-    age = st.number_input('Age', min_value=0, step=1)
+    entry_method = st.radio("Select Entry Method", ("Manual Entry", "Image Upload"))
 
-    if st.button('Add Entry'):
-        add_entry(date, fat, muscle, water, weight, age)
-        reset_ids()
-        st.success('Entry added successfully.')
-        st.rerun()
+    if entry_method == "Manual Entry":
+        date = st.date_input('Date')
+        fat = st.number_input('Fat Percentage', min_value=0.0, max_value=100.0, step=0.1)
+        muscle = st.number_input('Muscle Percentage', min_value=0.0, max_value=100.0, step=0.1)
+        water = st.number_input('Water Percentage', min_value=0.0, max_value=100.0, step=0.1)
+        weight = st.number_input('Weight', min_value=0.0, step=0.1)
+        age = st.number_input('Age', min_value=0, step=1)
+
+        if st.button('Add Entry'):
+            add_entry(date, fat, muscle, water, weight, age)
+            reset_ids()
+            st.success('Entry added successfully.')
+            st.rerun()
+
+    elif entry_method == "Image Upload":
+        uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+
+        if uploaded_file is not None:
+            # Read the uploaded image using OpenCV
+            image = cv2.imdecode(np.fromstring(uploaded_file.read(), np.uint8), 1)
+
+            # Preprocess the image
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+
+            # Apply OCR using pytesseract
+            text = pytesseract.image_to_string(thresh)
+
+            # Extract the stats from the OCR text
+            lines = text.split('\n')
+            print(lines)
+            for line in lines:
+                if 'lb' in line:
+                    weight = float(line.split('lb')[0].strip())
+                elif '%' in line:
+                    if 'fat' in line.lower():
+                        fat = float(line.split('%')[0].strip())
+                    elif 'mus' in line.lower():
+                        muscle = float(line.split('%')[0].strip())
+                    elif 'water' in line.lower():
+                        water = float(line.split('%')[0].strip())
+
+            # Display the extracted values
+            st.write("Extracted Stats:")
+            st.write(f"Weight: {weight} lb")
+            st.write(f"Fat: {fat}%")
+            st.write(f"Muscle: {muscle}%")
+            st.write(f"Water: {water}%")
+
+            if st.button('Add Entry'):
+                # Extract the date from the image filename or ask the user to input it
+                date = st.date_input('Date')
+                add_entry(date, fat, muscle, water, weight, age)
+                st.success('Entry added successfully.')
+                st.rerun()
 
 if __name__ == '__main__':
     try:
